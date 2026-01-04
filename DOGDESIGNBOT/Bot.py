@@ -4,8 +4,8 @@ from aiogram import Bot, Dispatcher, types
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 # ----------------- НАСТРОЙКИ -----------------
-TOKEN = "8376239597:AAHYeacPDfZDso4h3RD07vDYNTj9w9dg3wY"  # твой токен
-ADMIN_IDS = [7388659987]  # твой ID
+TOKEN = "8376239597:AAHYeacPDfZDso4h3RD07vDYNTj9w9dg3wY"
+ADMIN_IDS = [7388659987]
 
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
@@ -54,6 +54,18 @@ def get_maintenance():
     cursor.execute("SELECT value FROM settings WHERE name = 'maintenance'")
     return cursor.fetchone()[0]
 
+def get_all_user_ids():
+    cursor.execute("SELECT user_id FROM users")
+    return [u[0] for u in cursor.fetchall()]
+
+async def notify_maintenance(status: str):
+    text = f"⚠️ Технический перерыв включен!" if status == "on" else "✅ Технический перерыв отключен!"
+    for user_id in get_all_user_ids():
+        try:
+            await bot.send_message(user_id, text)
+        except:
+            pass  # Игнорируем, если пользователь заблокировал бота
+
 # ================== КЛАВИАТУРЫ ==================
 def main_menu(is_admin=False):
     kb = InlineKeyboardBuilder()
@@ -86,8 +98,9 @@ def admin_menu():
     return kb.as_markup()
 
 # ================== ХЕНДЛЕРЫ ==================
-@dp.message()
+@dp.message(commands=["start"])
 async def start(message: types.Message):
+    """Приветствие по команде /start"""
     is_admin = message.from_user.id in ADMIN_IDS
     get_user(message.from_user.id, message.from_user.username)
     await message.answer(
@@ -97,10 +110,12 @@ async def start(message: types.Message):
 
 @dp.callback_query()
 async def callback_handler(callback: types.CallbackQuery):
+    """Обработка всех callback кнопок"""
     user = get_user(callback.from_user.id, callback.from_user.username)
     is_admin = callback.from_user.id in ADMIN_IDS
     data = callback.data
 
+    # ---------------- Технический перерыв ----------------
     if get_maintenance() == "on" and data not in ["admin", "toggle_maintenance", "back", "admin_list", "admin_add_points", "admin_delete"]:
         await callback.answer("Сейчас технический перерыв! Действия недоступны.", show_alert=True)
         return
@@ -109,12 +124,7 @@ async def callback_handler(callback: types.CallbackQuery):
     if data == "click":
         cursor.execute("SELECT premium FROM users WHERE user_id = ?", (user[0],))
         status = cursor.fetchone()[0]
-
-        if status == "none" or status == "premium":
-            total = 1
-        elif status == "ultra":
-            total = 250
-
+        total = 250 if status == "ultra" else 1
         cursor.execute("UPDATE users SET points = points + ?, clicks = clicks + 1 WHERE user_id = ?", (total, user[0]))
         conn.commit()
         await callback.answer(f"Вы получили {total} очков!")
@@ -166,6 +176,7 @@ async def callback_handler(callback: types.CallbackQuery):
         current = get_maintenance()
         new_status = "off" if current == "on" else "on"
         set_maintenance(new_status)
+        await notify_maintenance(new_status)  # уведомляем всех пользователей
         await callback.message.answer(f"Технический перерыв теперь: {new_status.upper()}", reply_markup=admin_menu())
 
     elif data == "admin_list" and is_admin:
@@ -178,11 +189,11 @@ async def callback_handler(callback: types.CallbackQuery):
 
     elif data == "admin_add_points" and is_admin:
         await callback.message.answer("Введите ID пользователя, очки и клики через пробел, например:\n123456789 500 10")
-        dp.register_message_handler(admin_add_points)
+        dp.register_message_handler(admin_add_points, state=None)
 
     elif data == "admin_delete" and is_admin:
         await callback.message.answer("Введите ID пользователя для удаления:")
-        dp.register_message_handler(admin_delete_user)
+        dp.register_message_handler(admin_delete_user, state=None)
 
     elif data == "back":
         await callback.message.answer("Главное меню:", reply_markup=main_menu(is_admin))
