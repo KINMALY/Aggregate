@@ -1,26 +1,26 @@
-# Telegram-бот заказов аватарок с управлением статуса дизайнера и оплатой через Сбер
+# Telegram-бот заказов аватарок (дизайнер и админ один человек)
 # Стек: Python 3.10+, aiogram 3.x, SQLite
 
 import asyncio
 import logging
 from aiogram import Bot, Dispatcher, F
-from aiogram.types import Message, InputFile, CallbackQuery
+from aiogram.types import Message, CallbackQuery
 from aiogram.filters import CommandStart
 from aiogram.fsm.state import StatesGroup, State
 from aiogram.fsm.context import FSMContext
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 import sqlite3
 
-# --------- НАСТРОЙКИ БОТА ---------
+# ---------------- НАСТРОЙКИ ----------------
 TOKEN = "8376239597:AAHYeacPDfZDso4h3RD07vDYNTj9w9dg3wY"
-DESIGNER_ID = 7388659987  # Telegram ID дизайнера и админа
-SBER_NUMBER = "+79936473112"  # Номер Сбер для оплаты
+DESIGNER_ID = 7388659987  # дизайнер и админ
+SBER_NUMBER = "+79936473112"
 
 bot = Bot(TOKEN)
 dp = Dispatcher()
 logging.basicConfig(level=logging.INFO)
 
-# ---------- БАЗА ДАННЫХ ----------
+# ---------------- БАЗА ----------------
 conn = sqlite3.connect("orders.db")
 cursor = conn.cursor()
 cursor.execute("""
@@ -43,22 +43,27 @@ CREATE TABLE IF NOT EXISTS designer_status (
 """)
 conn.commit()
 
-# ---------- СОСТОЯНИЯ ----------
+# ---------------- СОСТОЯНИЯ ----------------
 class OrderState(StatesGroup):
     character = State()
     nickname = State()
     colors = State()
     details = State()
-    payment_confirmation = State()
+    waiting_payment = State()
 
-# ---------- START ----------
+# ---------------- /start ----------------
 @dp.message(CommandStart())
 async def start(msg: Message):
     kb = InlineKeyboardBuilder()
-    kb.button(text="🎨 Заказать аватарку", callback_data="check_designer")
-    await msg.answer("Привет! Закажи аватарку 👇", reply_markup=kb.as_markup())
+    if msg.from_user.id == DESIGNER_ID:
+        kb.button(text="🟢 Онлайн/Офлайн", callback_data="toggle_status")
+        kb.button(text="📦 Посмотреть заказы", callback_data="view_orders")
+        await msg.answer("Привет, дизайнер! Вот твои команды:", reply_markup=kb.as_markup())
+    else:
+        kb.button(text="🎨 Заказать аватарку", callback_data="check_designer")
+        await msg.answer("Привет! Закажи аватарку 👇", reply_markup=kb.as_markup())
 
-# ---------- ПРОВЕРКА СТАТУСА ДИЗАЙНЕРА ----------
+# ---------------- Проверка дизайнера ----------------
 @dp.callback_query(F.data == "check_designer")
 async def check_designer(cb: CallbackQuery):
     cursor.execute("SELECT online FROM designer_status WHERE designer_id=?", (DESIGNER_ID,))
@@ -66,43 +71,28 @@ async def check_designer(cb: CallbackQuery):
     designer_online = row[0] == 1 if row else True
 
     if designer_online:
-        kb = InlineKeyboardBuilder()
-        kb.button(text=f"💳 Оплатить через Сбер {SBER_NUMBER}", callback_data="payment_sber")
-        await cb.message.answer("Дизайнер доступен ✅\nОплати и оставь заявку!", reply_markup=kb.as_markup())
+        await cb.message.answer("Дизайнер доступен ✅\nДавайте заполним анкету для заказа")
+        await OrderState.character.set()
     else:
         await cb.message.answer("Дизайнер сейчас недоступен ❌")
 
-# ---------- ОПЛАТА ЧЕРЕЗ СБЕР ----------
-@dp.callback_query(F.data == "payment_sber")
-async def payment_sber(cb: CallbackQuery, state: FSMContext):
-    await cb.message.answer(f"После оплаты на номер {SBER_NUMBER} отправь сообщение 'Оплатил' и прикрепи скрин перевода")
-    await state.set_state(OrderState.payment_confirmation)
-
-@dp.message(OrderState.payment_confirmation)
-async def confirm_payment(msg: Message, state: FSMContext):
-    if 'оплатил' in msg.text.lower() and (msg.photo or msg.document):
-        await msg.answer("Оплата подтверждена ✅ Ответь на вопросы для заказа")
-        await state.set_state(OrderState.character)
-    else:
-        await msg.answer("Пожалуйста, отправь сообщение с текстом 'Оплатил' и приложи скрин перевода")
-
-# ---------- АНКЕТА ----------
+# ---------------- Анкета ----------------
 @dp.message(OrderState.character)
 async def character(msg: Message, state: FSMContext):
     await state.update_data(character=msg.text)
-    await state.set_state(OrderState.nickname)
-    await msg.answer("Какой ник?")
+    await OrderState.nickname.set()
+    await msg.answer("Введите ник персонажа:")
 
 @dp.message(OrderState.nickname)
 async def nickname(msg: Message, state: FSMContext):
     await state.update_data(nickname=msg.text)
-    await state.set_state(OrderState.colors)
-    await msg.answer("Цвета?")
+    await OrderState.colors.set()
+    await msg.answer("Введите цвета:")
 
 @dp.message(OrderState.colors)
 async def colors(msg: Message, state: FSMContext):
     await state.update_data(colors=msg.text)
-    await state.set_state(OrderState.details)
+    await OrderState.details.set()
     await msg.answer("Дополнительные детали? (можно написать 'нет')")
 
 @dp.message(OrderState.details)
@@ -110,15 +100,15 @@ async def details(msg: Message, state: FSMContext):
     data = await state.get_data()
     cursor.execute(
         "INSERT INTO orders (user_id, character, nickname, colors, details, status, paid) VALUES (?, ?, ?, ?, ?, ?, ?)",
-        (msg.from_user.id, data['character'], data['nickname'], data['colors'], msg.text, "new", 1)
+        (msg.from_user.id, data['character'], data['nickname'], data['colors'], msg.text, "new", 0)
     )
     conn.commit()
     order_id = cursor.lastrowid
 
-    await msg.answer("Заказ принят! 🎉")
-
+    # ---------------- Уведомление дизайнеру ----------------
     kb = InlineKeyboardBuilder()
-    kb.button(text="✅ Готово", callback_data=f"done_{order_id}")
+    kb.button(text="✅ Принять заказ", callback_data=f"accept_{order_id}")
+    kb.button(text="❌ Отказать", callback_data=f"reject_{order_id}")
 
     await bot.send_message(
         DESIGNER_ID,
@@ -130,47 +120,73 @@ async def details(msg: Message, state: FSMContext):
         reply_markup=kb.as_markup()
     )
 
+    await msg.answer("Ваш заказ отправлен дизайнеру на проверку ✅")
     await state.clear()
 
-# ---------- СМЕНА СТАТУСА ДИЗАЙНЕРА ----------
-@dp.message(F.from_user.id == DESIGNER_ID, F.text.lower().startswith("статус"))
-async def change_status(msg: Message):
-    if 'вкл' in msg.text.lower():
-        cursor.execute("INSERT OR REPLACE INTO designer_status (designer_id, online) VALUES (?, ?)" , (DESIGNER_ID,1))
-        conn.commit()
-        await msg.answer("Статус дизайнера: Онлайн ✅")
-    elif 'выкл' in msg.text.lower():
-        cursor.execute("INSERT OR REPLACE INTO designer_status (designer_id, online) VALUES (?, ?)" , (DESIGNER_ID,0))
-        conn.commit()
-        await msg.answer("Статус дизайнера: Офлайн ❌")
-    else:
-        await msg.answer("Используй 'статус вкл' или 'статус выкл'")
-
-# ---------- ДИЗАЙНЕР ----------
-@dp.callback_query(F.data.startswith("done_"))
-async def done(cb: CallbackQuery):
+# ---------------- Дизайнер принимает/отказывает ----------------
+@dp.callback_query(F.data.startswith("accept_"))
+async def accept_order(cb: CallbackQuery):
     order_id = cb.data.split("_")[1]
-    cursor.execute("UPDATE orders SET status='done' WHERE id=?", (order_id,))
+    cursor.execute("UPDATE orders SET status='accepted' WHERE id=?", (order_id,))
     conn.commit()
-    await cb.message.answer("Отправь готовую аватарку файлом")
+    await cb.message.edit_text(f"Заказ #{order_id} принят ✅")
+    user_id = cursor.execute("SELECT user_id FROM orders WHERE id=?", (order_id,)).fetchone()[0]
+    await bot.send_message(user_id, f"Ваш заказ #{order_id} принят! 🎨\nОплатите на Сбер: {SBER_NUMBER} и отправьте скрин перевода")
+    # переводим пользователя в состояние оплаты
+    await OrderState.waiting_payment.set()
 
+@dp.callback_query(F.data.startswith("reject_"))
+async def reject_order(cb: CallbackQuery):
+    order_id = cb.data.split("_")[1]
+    cursor.execute("UPDATE orders SET status='rejected' WHERE id=?", (order_id,))
+    conn.commit()
+    await cb.message.edit_text(f"Заказ #{order_id} отклонён ❌")
+    user_id = cursor.execute("SELECT user_id FROM orders WHERE id=?", (order_id,)).fetchone()[0]
+    await bot.send_message(user_id, f"Ваш заказ #{order_id} отклонён дизайнером. Попробуйте оформить новый заказ.")
+
+# ---------------- Подтверждение оплаты ----------------
+@dp.message(OrderState.waiting_payment)
+async def confirm_payment(msg: Message):
+    if 'оплатил' in msg.text.lower():
+        cursor.execute("UPDATE orders SET paid=1 WHERE user_id=?", (msg.from_user.id,))
+        conn.commit()
+        await msg.answer("Оплата подтверждена ✅\nДизайнер приступает к работе")
+        # уведомление дизайнеру, что можно выполнять
+        await bot.send_message(DESIGNER_ID, f"Пользователь {msg.from_user.full_name} оплатил заказ! Можно приступать.")
+    else:
+        await msg.answer("Пожалуйста, отправьте сообщение с текстом 'Оплатил' после перевода.")
+
+# ---------------- Дизайнер отправляет готовую аватарку ----------------
 @dp.message(F.photo | F.document, F.from_user.id == DESIGNER_ID)
 async def send_result(msg: Message):
-    cursor.execute("SELECT user_id FROM orders WHERE status='done' ORDER BY id DESC LIMIT 1")
-    row = cursor.fetchone()
-    if row:
-        user_id = row[0]
+    order = cursor.execute("SELECT user_id FROM orders WHERE status='accepted' ORDER BY id DESC LIMIT 1").fetchone()
+    if order:
+        user_id = order[0]
         kb = InlineKeyboardBuilder()
         kb.button(text="⭐ Оставить отзыв", callback_data="review")
-        await bot.send_message(user_id, "Ваша аватарка готова! 🎉")
-        await msg.copy_to(user_id, reply_markup=kb.as_markup())
+        await bot.send_message(user_id, "Ваша аватарка готова! 🎉", reply_markup=kb.as_markup())
+        await msg.copy_to(user_id)
+        cursor.execute("UPDATE orders SET status='done' WHERE user_id=?", (user_id,))
+        conn.commit()
 
-# ---------- ОТЗЫВ ----------
+# ---------------- Оставить отзыв ----------------
 @dp.callback_query(F.data == "review")
 async def review(cb: CallbackQuery):
-    await cb.message.answer("Спасибо за заказ! Напиши отзыв текстом ⭐")
+    await cb.message.answer("Спасибо за заказ! Напишите свой отзыв текстом ⭐")
 
-# ---------- RUN ----------
+# ---------------- Статус дизайнера ----------------
+@dp.callback_query(F.data == "toggle_status")
+async def toggle_status(cb: CallbackQuery):
+    cursor.execute("SELECT online FROM designer_status WHERE designer_id=?", (DESIGNER_ID,))
+    row = cursor.fetchone()
+    current = row[0] == 1 if row else True
+    new_status = 0 if current else 1
+    cursor.execute("INSERT OR REPLACE INTO designer_status (designer_id, online) VALUES (?, ?)", (DESIGNER_ID, new_status))
+    conn.commit()
+    status_text = "Онлайн ✅" if new_status else "Офлайн ❌"
+    await cb.message.edit_text(f"Статус дизайнера изменён: {status_text}")
+
+# ---------------- RUN ----------------
 async def main():
     await dp.start_polling(bot)
 
