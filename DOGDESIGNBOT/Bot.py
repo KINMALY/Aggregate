@@ -1,7 +1,7 @@
 import sqlite3
 import asyncio
 from aiogram import Bot, Dispatcher, types
-from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 # ----------------- НАСТРОЙКИ -----------------
 TOKEN = "8376239597:AAHYeacPDfZDso4h3RD07vDYNTj9w9dg3wY"  # твой токен
@@ -14,7 +14,6 @@ dp = Dispatcher()
 conn = sqlite3.connect("clicker.db")
 cursor = conn.cursor()
 
-# Таблица пользователей
 cursor.execute('''
 CREATE TABLE IF NOT EXISTS users (
     user_id INTEGER PRIMARY KEY,
@@ -25,7 +24,6 @@ CREATE TABLE IF NOT EXISTS users (
 )
 ''')
 
-# Таблица настроек (технический перерыв)
 cursor.execute('''
 CREATE TABLE IF NOT EXISTS settings (
     name TEXT PRIMARY KEY,
@@ -58,34 +56,34 @@ def get_maintenance():
 
 # ================== КЛАВИАТУРЫ ==================
 def main_menu(is_admin=False):
-    kb = InlineKeyboardMarkup()
+    kb = InlineKeyboardBuilder()
     kb.row(
-        InlineKeyboardButton("Клик!", callback_data="click"),
-        InlineKeyboardButton("Профиль", callback_data="profile")
+        types.InlineKeyboardButton(text="Клик!", callback_data="click"),
+        types.InlineKeyboardButton(text="Профиль", callback_data="profile")
     )
     kb.row(
-        InlineKeyboardButton("Рейтинг", callback_data="rating"),
-        InlineKeyboardButton("Магазин", callback_data="shop")
+        types.InlineKeyboardButton(text="Рейтинг", callback_data="rating"),
+        types.InlineKeyboardButton(text="Магазин", callback_data="shop")
     )
     if is_admin:
-        kb.add(InlineKeyboardButton("Админ меню", callback_data="admin"))
-    return kb
+        kb.add(types.InlineKeyboardButton(text="Админ меню", callback_data="admin"))
+    return kb.as_markup()
 
 def shop_menu():
-    kb = InlineKeyboardMarkup()
-    kb.add(InlineKeyboardButton("Премиум — 5000 очков (+50 кликов)", callback_data="buy_premium"))
-    kb.add(InlineKeyboardButton("Ультра Премиум — 50000 очков", callback_data="buy_ultra"))
-    kb.add(InlineKeyboardButton("Назад", callback_data="back"))
-    return kb
+    kb = InlineKeyboardBuilder()
+    kb.add(types.InlineKeyboardButton(text="Премиум — 5000 очков (+50 кликов)", callback_data="buy_premium"))
+    kb.add(types.InlineKeyboardButton(text="Ультра Премиум — 50000 очков", callback_data="buy_ultra"))
+    kb.add(types.InlineKeyboardButton(text="Назад", callback_data="back"))
+    return kb.as_markup()
 
 def admin_menu():
-    kb = InlineKeyboardMarkup()
-    kb.add(InlineKeyboardButton("Добавить очки/клики пользователю", callback_data="admin_add_points"))
-    kb.add(InlineKeyboardButton("Посмотреть всех пользователей", callback_data="admin_list"))
-    kb.add(InlineKeyboardButton("Удалить пользователя", callback_data="admin_delete"))
-    kb.add(InlineKeyboardButton(f"Тех.перерыв: {get_maintenance().upper()}", callback_data="toggle_maintenance"))
-    kb.add(InlineKeyboardButton("Назад", callback_data="back"))
-    return kb
+    kb = InlineKeyboardBuilder()
+    kb.add(types.InlineKeyboardButton(text="Добавить очки/клики пользователю", callback_data="admin_add_points"))
+    kb.add(types.InlineKeyboardButton(text="Посмотреть всех пользователей", callback_data="admin_list"))
+    kb.add(types.InlineKeyboardButton(text="Удалить пользователя", callback_data="admin_delete"))
+    kb.add(types.InlineKeyboardButton(text=f"Тех.перерыв: {get_maintenance().upper()}", callback_data="toggle_maintenance"))
+    kb.add(types.InlineKeyboardButton(text="Назад", callback_data="back"))
+    return kb.as_markup()
 
 # ================== ХЕНДЛЕРЫ ==================
 @dp.message()
