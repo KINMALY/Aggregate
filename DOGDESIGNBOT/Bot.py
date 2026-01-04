@@ -1,6 +1,7 @@
 import sqlite3
 import asyncio
 from aiogram import Bot, Dispatcher, types
+from aiogram.filters import Command
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 # ----------------- НАСТРОЙКИ -----------------
@@ -98,7 +99,7 @@ def admin_menu():
     return kb.as_markup()
 
 # ================== ХЕНДЛЕРЫ ==================
-@dp.message(commands=["start"])
+@dp.message(Command("start"))
 async def start(message: types.Message):
     """Приветствие по команде /start"""
     is_admin = message.from_user.id in ADMIN_IDS
@@ -110,7 +111,6 @@ async def start(message: types.Message):
 
 @dp.callback_query()
 async def callback_handler(callback: types.CallbackQuery):
-    """Обработка всех callback кнопок"""
     user = get_user(callback.from_user.id, callback.from_user.username)
     is_admin = callback.from_user.id in ADMIN_IDS
     data = callback.data
