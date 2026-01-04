@@ -1,194 +1,234 @@
-# Telegram-бот заказов аватарок (дизайнер и админ один человек)
-# Стек: Python 3.10+, aiogram 3.x, SQLite
-
-import asyncio
-import logging
-from aiogram import Bot, Dispatcher, F
-from aiogram.types import Message, CallbackQuery
-from aiogram.filters import CommandStart
-from aiogram.fsm.state import StatesGroup, State
-from aiogram.fsm.context import FSMContext
-from aiogram.utils.keyboard import InlineKeyboardBuilder
 import sqlite3
+from aiogram import Bot, Dispatcher, types
+from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+from aiogram.utils import executor
 
-# ---------------- НАСТРОЙКИ ----------------
-TOKEN = "8376239597:AAHYeacPDfZDso4h3RD07vDYNTj9w9dg3wY"
-DESIGNER_ID = 7388659987  # дизайнер и админ
-SBER_NUMBER = "+79936473112"
+# ----------------- НАСТРОЙКИ -----------------
+TOKEN = "8376239597:AAHYeacPDfZDso4h3RD07vDYNTj9w9dg3wY"  # твой токен
+ADMIN_IDS = [7388659987]  # твой ID
 
-bot = Bot(TOKEN)
-dp = Dispatcher()
-logging.basicConfig(level=logging.INFO)
+bot = Bot(token=TOKEN)
+dp = Dispatcher(bot)
 
-# ---------------- БАЗА ----------------
-conn = sqlite3.connect("orders.db")
+# ================== БАЗА ДАННЫХ ==================
+conn = sqlite3.connect("clicker.db")
 cursor = conn.cursor()
-cursor.execute("""
-CREATE TABLE IF NOT EXISTS orders (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id INTEGER,
-    character TEXT,
-    nickname TEXT,
-    colors TEXT,
-    details TEXT,
-    status TEXT,
-    paid INTEGER DEFAULT 0
+
+# Таблица пользователей
+cursor.execute('''
+CREATE TABLE IF NOT EXISTS users (
+    user_id INTEGER PRIMARY KEY,
+    username TEXT,
+    points INTEGER DEFAULT 0,
+    premium TEXT DEFAULT 'none',
+    clicks INTEGER DEFAULT 0
 )
-""")
-cursor.execute("""
-CREATE TABLE IF NOT EXISTS designer_status (
-    designer_id INTEGER PRIMARY KEY,
-    online INTEGER DEFAULT 1
+''')
+
+# Таблица настроек (технический перерыв)
+cursor.execute('''
+CREATE TABLE IF NOT EXISTS settings (
+    name TEXT PRIMARY KEY,
+    value TEXT
 )
-""")
+''')
 conn.commit()
 
-# ---------------- СОСТОЯНИЯ ----------------
-class OrderState(StatesGroup):
-    character = State()
-    nickname = State()
-    colors = State()
-    details = State()
-    waiting_payment = State()
+# Инициализация технического перерыва
+cursor.execute("INSERT OR IGNORE INTO settings (name, value) VALUES ('maintenance', 'off')")
+conn.commit()
 
-# ---------------- /start ----------------
-@dp.message(CommandStart())
-async def start(msg: Message):
-    kb = InlineKeyboardBuilder()
-    if msg.from_user.id == DESIGNER_ID:
-        kb.button(text="🟢 Онлайн/Офлайн", callback_data="toggle_status")
-        kb.button(text="📦 Посмотреть заказы", callback_data="view_orders")
-        await msg.answer("Привет, дизайнер! Вот твои команды:", reply_markup=kb.as_markup())
-    else:
-        kb.button(text="🎨 Заказать аватарку", callback_data="check_designer")
-        await msg.answer("Привет! Закажи аватарку 👇", reply_markup=kb.as_markup())
+# ================== ХЕЛПЕРЫ ==================
+def get_user(user_id, username):
+    cursor.execute("SELECT * FROM users WHERE user_id = ?", (user_id,))
+    user = cursor.fetchone()
+    if not user:
+        cursor.execute("INSERT INTO users (user_id, username) VALUES (?, ?)", (user_id, username))
+        conn.commit()
+        cursor.execute("SELECT * FROM users WHERE user_id = ?", (user_id,))
+        user = cursor.fetchone()
+    return user
 
-# ---------------- Проверка дизайнера ----------------
-@dp.callback_query(F.data == "check_designer")
-async def check_designer(cb: CallbackQuery):
-    cursor.execute("SELECT online FROM designer_status WHERE designer_id=?", (DESIGNER_ID,))
-    row = cursor.fetchone()
-    designer_online = row[0] == 1 if row else True
-
-    if designer_online:
-        await cb.message.answer("Дизайнер доступен ✅\nДавайте заполним анкету для заказа")
-        await OrderState.character.set()
-    else:
-        await cb.message.answer("Дизайнер сейчас недоступен ❌")
-
-# ---------------- Анкета ----------------
-@dp.message(OrderState.character)
-async def character(msg: Message, state: FSMContext):
-    await state.update_data(character=msg.text)
-    await OrderState.nickname.set()
-    await msg.answer("Введите ник персонажа:")
-
-@dp.message(OrderState.nickname)
-async def nickname(msg: Message, state: FSMContext):
-    await state.update_data(nickname=msg.text)
-    await OrderState.colors.set()
-    await msg.answer("Введите цвета:")
-
-@dp.message(OrderState.colors)
-async def colors(msg: Message, state: FSMContext):
-    await state.update_data(colors=msg.text)
-    await OrderState.details.set()
-    await msg.answer("Дополнительные детали? (можно написать 'нет')")
-
-@dp.message(OrderState.details)
-async def details(msg: Message, state: FSMContext):
-    data = await state.get_data()
-    cursor.execute(
-        "INSERT INTO orders (user_id, character, nickname, colors, details, status, paid) VALUES (?, ?, ?, ?, ?, ?, ?)",
-        (msg.from_user.id, data['character'], data['nickname'], data['colors'], msg.text, "new", 0)
-    )
+def set_maintenance(status: str):
+    cursor.execute("UPDATE settings SET value = ? WHERE name = 'maintenance'", (status,))
     conn.commit()
-    order_id = cursor.lastrowid
 
-    # ---------------- Уведомление дизайнеру ----------------
-    kb = InlineKeyboardBuilder()
-    kb.button(text="✅ Принять заказ", callback_data=f"accept_{order_id}")
-    kb.button(text="❌ Отказать", callback_data=f"reject_{order_id}")
+def get_maintenance():
+    cursor.execute("SELECT value FROM settings WHERE name = 'maintenance'")
+    return cursor.fetchone()[0]  # 'on' или 'off'
 
-    await bot.send_message(
-        DESIGNER_ID,
-        f"🆕 Новый заказ #{order_id}\n\n"
-        f"Персонаж: {data['character']}\n"
-        f"Ник: {data['nickname']}\n"
-        f"Цвета: {data['colors']}\n"
-        f"Детали: {msg.text}",
-        reply_markup=kb.as_markup()
+# ================== КЛАВИАТУРЫ ==================
+def main_menu(is_admin=False):
+    kb = InlineKeyboardMarkup(row_width=2)
+    kb.add(
+        InlineKeyboardButton("Клик!", callback_data="click"),
+        InlineKeyboardButton("Профиль", callback_data="profile"),
+        InlineKeyboardButton("Рейтинг", callback_data="rating"),
+        InlineKeyboardButton("Магазин", callback_data="shop")
+    )
+    if is_admin:
+        kb.add(InlineKeyboardButton("Админ меню", callback_data="admin"))
+    return kb
+
+def shop_menu():
+    kb = InlineKeyboardMarkup(row_width=1)
+    kb.add(
+        InlineKeyboardButton("Премиум — 100 очков", callback_data="buy_premium"),
+        InlineKeyboardButton("Ультра Премиум — 500 очков", callback_data="buy_ultra"),
+        InlineKeyboardButton("Назад", callback_data="back")
+    )
+    return kb
+
+def admin_menu():
+    kb = InlineKeyboardMarkup(row_width=1)
+    maintenance_status = get_maintenance()
+    kb.add(
+        InlineKeyboardButton("Добавить очки пользователю", callback_data="admin_add_points"),
+        InlineKeyboardButton("Посмотреть всех пользователей", callback_data="admin_list"),
+        InlineKeyboardButton("Удалить пользователя", callback_data="admin_delete"),
+        InlineKeyboardButton(f"Тех.перерыв: {maintenance_status.upper()}", callback_data="toggle_maintenance"),
+        InlineKeyboardButton("Назад", callback_data="back")
+    )
+    return kb
+
+# ================== ХЕНДЛЕРЫ ==================
+@dp.message_handler(commands=['start'])
+async def start(message: types.Message):
+    is_admin = message.from_user.id in ADMIN_IDS
+    user = get_user(message.from_user.id, message.from_user.username)
+    await message.answer(
+        f"Привет, {message.from_user.first_name}! Добро пожаловать в Clicker Bot!",
+        reply_markup=main_menu(is_admin)
     )
 
-    await msg.answer("Ваш заказ отправлен дизайнеру на проверку ✅")
-    await state.clear()
+# ------------------- CALLBACK -------------------
+@dp.callback_query_handler(lambda c: True)
+async def callback_handler(callback: types.CallbackQuery):
+    user = get_user(callback.from_user.id, callback.from_user.username)
+    is_admin = callback.from_user.id in ADMIN_IDS
+    data = callback.data
 
-# ---------------- Дизайнер принимает/отказывает ----------------
-@dp.callback_query(F.data.startswith("accept_"))
-async def accept_order(cb: CallbackQuery):
-    order_id = cb.data.split("_")[1]
-    cursor.execute("UPDATE orders SET status='accepted' WHERE id=?", (order_id,))
-    conn.commit()
-    await cb.message.edit_text(f"Заказ #{order_id} принят ✅")
-    user_id = cursor.execute("SELECT user_id FROM orders WHERE id=?", (order_id,)).fetchone()[0]
-    await bot.send_message(user_id, f"Ваш заказ #{order_id} принят! 🎨\nОплатите на Сбер: {SBER_NUMBER} и отправьте скрин перевода")
-    # переводим пользователя в состояние оплаты
-    await OrderState.waiting_payment.set()
+    # -------- Проверка технического перерыва --------
+    if get_maintenance() == "on" and data not in ["admin", "toggle_maintenance", "back", "admin_list", "admin_add_points", "admin_delete"]:
+        await callback.answer("Сейчас технический перерыв! Действия недоступны.", show_alert=True)
+        return
 
-@dp.callback_query(F.data.startswith("reject_"))
-async def reject_order(cb: CallbackQuery):
-    order_id = cb.data.split("_")[1]
-    cursor.execute("UPDATE orders SET status='rejected' WHERE id=?", (order_id,))
-    conn.commit()
-    await cb.message.edit_text(f"Заказ #{order_id} отклонён ❌")
-    user_id = cursor.execute("SELECT user_id FROM orders WHERE id=?", (order_id,)).fetchone()[0]
-    await bot.send_message(user_id, f"Ваш заказ #{order_id} отклонён дизайнером. Попробуйте оформить новый заказ.")
-
-# ---------------- Подтверждение оплаты ----------------
-@dp.message(OrderState.waiting_payment)
-async def confirm_payment(msg: Message):
-    if 'оплатил' in msg.text.lower():
-        cursor.execute("UPDATE orders SET paid=1 WHERE user_id=?", (msg.from_user.id,))
+    # -------- Клик --------
+    if data == "click":
+        # увеличиваем счётчик кликов
+        cursor.execute("UPDATE users SET clicks = clicks + 1 WHERE user_id = ?", (user[0],))
         conn.commit()
-        await msg.answer("Оплата подтверждена ✅\nДизайнер приступает к работе")
-        # уведомление дизайнеру, что можно выполнять
-        await bot.send_message(DESIGNER_ID, f"Пользователь {msg.from_user.full_name} оплатил заказ! Можно приступать.")
-    else:
-        await msg.answer("Пожалуйста, отправьте сообщение с текстом 'Оплатил' после перевода.")
+        cursor.execute("SELECT clicks, premium, points FROM users WHERE user_id = ?", (user[0],))
+        clicks, status, points = cursor.fetchone()
 
-# ---------------- Дизайнер отправляет готовую аватарку ----------------
-@dp.message(F.photo | F.document, F.from_user.id == DESIGNER_ID)
-async def send_result(msg: Message):
-    order = cursor.execute("SELECT user_id FROM orders WHERE status='accepted' ORDER BY id DESC LIMIT 1").fetchone()
-    if order:
-        user_id = order[0]
-        kb = InlineKeyboardBuilder()
-        kb.button(text="⭐ Оставить отзыв", callback_data="review")
-        await bot.send_message(user_id, "Ваша аватарка готова! 🎉", reply_markup=kb.as_markup())
-        await msg.copy_to(user_id)
-        cursor.execute("UPDATE orders SET status='done' WHERE user_id=?", (user_id,))
+        # базовые очки и бонусы
+        base_points = 1
+        bonus = 0
+        if status == "none":
+            base_points = 1
+        elif status == "premium":
+            base_points = 2
+            if clicks % 10 == 0:  # каждые 10 кликов бонус
+                bonus = 1
+        elif status == "ultra":
+            base_points = 5
+            if clicks % 5 == 0:  # каждый 5-й клик удвоение
+                bonus = base_points
+
+        total = base_points + bonus
+        cursor.execute("UPDATE users SET points = points + ? WHERE user_id = ?", (total, user[0]))
         conn.commit()
+        await callback.answer(f"Вы получили {total} очков! (Бонус: {bonus})")
 
-# ---------------- Оставить отзыв ----------------
-@dp.callback_query(F.data == "review")
-async def review(cb: CallbackQuery):
-    await cb.message.answer("Спасибо за заказ! Напишите свой отзыв текстом ⭐")
+    # -------- Профиль --------
+    elif data == "profile":
+        await callback.message.answer(
+            f"Профиль {callback.from_user.first_name}\n"
+            f"Очки: {user[2]}\n"
+            f"Статус: {user[3]}\n"
+            f"Клики: {user[4]}"
+        )
 
-# ---------------- Статус дизайнера ----------------
-@dp.callback_query(F.data == "toggle_status")
-async def toggle_status(cb: CallbackQuery):
-    cursor.execute("SELECT online FROM designer_status WHERE designer_id=?", (DESIGNER_ID,))
-    row = cursor.fetchone()
-    current = row[0] == 1 if row else True
-    new_status = 0 if current else 1
-    cursor.execute("INSERT OR REPLACE INTO designer_status (designer_id, online) VALUES (?, ?)", (DESIGNER_ID, new_status))
-    conn.commit()
-    status_text = "Онлайн ✅" if new_status else "Офлайн ❌"
-    await cb.message.edit_text(f"Статус дизайнера изменён: {status_text}")
+    # -------- Рейтинг --------
+    elif data == "rating":
+        cursor.execute("SELECT username, points FROM users ORDER BY points DESC LIMIT 10")
+        top = cursor.fetchall()
+        text = "🏆 Топ игроков:\n"
+        for i, u in enumerate(top, 1):
+            text += f"{i}. {u[0]} — {u[1]} очков\n"
+        await callback.message.answer(text)
 
-# ---------------- RUN ----------------
-async def main():
-    await dp.start_polling(bot)
+    # -------- Магазин --------
+    elif data == "shop":
+        await callback.message.answer("Магазин:", reply_markup=shop_menu())
 
+    elif data == "buy_premium":
+        if user[2] >= 100:
+            cursor.execute("UPDATE users SET points = points - 100, premium = 'premium' WHERE user_id = ?", (user[0],))
+            conn.commit()
+            await callback.answer("Вы купили Премиум!")
+        else:
+            await callback.answer("Недостаточно очков!", show_alert=True)
+
+    elif data == "buy_ultra":
+        if user[2] >= 500:
+            cursor.execute("UPDATE users SET points = points - 500, premium = 'ultra' WHERE user_id = ?", (user[0],))
+            conn.commit()
+            await callback.answer("Вы купили Ультра Премиум!")
+        else:
+            await callback.answer("Недостаточно очков!", show_alert=True)
+
+    # -------- Админ меню --------
+    elif data == "admin" and is_admin:
+        await callback.message.answer("Админ меню:", reply_markup=admin_menu())
+
+    elif data == "toggle_maintenance" and is_admin:
+        current = get_maintenance()
+        new_status = "off" if current == "on" else "on"
+        set_maintenance(new_status)
+        await callback.message.answer(f"Технический перерыв теперь: {new_status.upper()}", reply_markup=admin_menu())
+
+    elif data == "admin_list" and is_admin:
+        cursor.execute("SELECT user_id, username, points, premium FROM users")
+        users = cursor.fetchall()
+        text = "Все пользователи:\n"
+        for u in users:
+            text += f"{u[1]} ({u[0]}) — {u[2]} очков, {u[3]}\n"
+        await callback.message.answer(text)
+
+    elif data == "admin_add_points" and is_admin:
+        await callback.message.answer("Введите ID пользователя и количество очков через пробел, например:\n123456789 50")
+        dp.register_message_handler(admin_add_points)
+
+    elif data == "admin_delete" and is_admin:
+        await callback.message.answer("Введите ID пользователя для удаления:")
+        dp.register_message_handler(admin_delete_user)
+
+    elif data == "back":
+        await callback.message.answer("Главное меню:", reply_markup=main_menu(is_admin))
+
+# ------------------- ФУНКЦИИ АДМИНА -------------------
+async def admin_add_points(message: types.Message):
+    try:
+        user_id, points = message.text.split()
+        points = int(points)
+        cursor.execute("UPDATE users SET points = points + ? WHERE user_id = ?", (points, int(user_id)))
+        conn.commit()
+        await message.answer(f"Добавлено {points} очков пользователю {user_id}")
+    except:
+        await message.answer("Ошибка ввода. Формат: ID очки")
+    dp.unregister_message_handler(admin_add_points)
+
+async def admin_delete_user(message: types.Message):
+    try:
+        user_id = int(message.text)
+        cursor.execute("DELETE FROM users WHERE user_id = ?", (user_id,))
+        conn.commit()
+        await message.answer(f"Пользователь {user_id} удалён.")
+    except:
+        await message.answer("Ошибка ввода. Введите корректный ID")
+    dp.unregister_message_handler(admin_delete_user)
+
+# ================== ЗАПУСК ==================
 if __name__ == "__main__":
-    asyncio.run(main())
+    executor.start_polling(dp, skip_updates=True)
