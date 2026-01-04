@@ -34,7 +34,6 @@ CREATE TABLE IF NOT EXISTS settings (
 ''')
 conn.commit()
 
-# Инициализация технического перерыва
 cursor.execute("INSERT OR IGNORE INTO settings (name, value) VALUES ('maintenance', 'off')")
 conn.commit()
 
@@ -55,14 +54,16 @@ def set_maintenance(status: str):
 
 def get_maintenance():
     cursor.execute("SELECT value FROM settings WHERE name = 'maintenance'")
-    return cursor.fetchone()[0]  # 'on' или 'off'
+    return cursor.fetchone()[0]
 
 # ================== КЛАВИАТУРЫ ==================
 def main_menu(is_admin=False):
-    kb = InlineKeyboardMarkup(row_width=2)
-    kb.add(
+    kb = InlineKeyboardMarkup()
+    kb.row(
         InlineKeyboardButton("Клик!", callback_data="click"),
-        InlineKeyboardButton("Профиль", callback_data="profile"),
+        InlineKeyboardButton("Профиль", callback_data="profile")
+    )
+    kb.row(
         InlineKeyboardButton("Рейтинг", callback_data="rating"),
         InlineKeyboardButton("Магазин", callback_data="shop")
     )
@@ -71,24 +72,19 @@ def main_menu(is_admin=False):
     return kb
 
 def shop_menu():
-    kb = InlineKeyboardMarkup(row_width=1)
-    kb.add(
-        InlineKeyboardButton("Премиум — 5000 очков (+50 кликов)", callback_data="buy_premium"),
-        InlineKeyboardButton("Ультра Премиум — 50000 очков", callback_data="buy_ultra"),
-        InlineKeyboardButton("Назад", callback_data="back")
-    )
+    kb = InlineKeyboardMarkup()
+    kb.add(InlineKeyboardButton("Премиум — 5000 очков (+50 кликов)", callback_data="buy_premium"))
+    kb.add(InlineKeyboardButton("Ультра Премиум — 50000 очков", callback_data="buy_ultra"))
+    kb.add(InlineKeyboardButton("Назад", callback_data="back"))
     return kb
 
 def admin_menu():
-    kb = InlineKeyboardMarkup(row_width=1)
-    maintenance_status = get_maintenance()
-    kb.add(
-        InlineKeyboardButton("Добавить очки/клики пользователю", callback_data="admin_add_points"),
-        InlineKeyboardButton("Посмотреть всех пользователей", callback_data="admin_list"),
-        InlineKeyboardButton("Удалить пользователя", callback_data="admin_delete"),
-        InlineKeyboardButton(f"Тех.перерыв: {maintenance_status.upper()}", callback_data="toggle_maintenance"),
-        InlineKeyboardButton("Назад", callback_data="back")
-    )
+    kb = InlineKeyboardMarkup()
+    kb.add(InlineKeyboardButton("Добавить очки/клики пользователю", callback_data="admin_add_points"))
+    kb.add(InlineKeyboardButton("Посмотреть всех пользователей", callback_data="admin_list"))
+    kb.add(InlineKeyboardButton("Удалить пользователя", callback_data="admin_delete"))
+    kb.add(InlineKeyboardButton(f"Тех.перерыв: {get_maintenance().upper()}", callback_data="toggle_maintenance"))
+    kb.add(InlineKeyboardButton("Назад", callback_data="back"))
     return kb
 
 # ================== ХЕНДЛЕРЫ ==================
@@ -107,12 +103,11 @@ async def callback_handler(callback: types.CallbackQuery):
     is_admin = callback.from_user.id in ADMIN_IDS
     data = callback.data
 
-    # -------- Проверка технического перерыва --------
     if get_maintenance() == "on" and data not in ["admin", "toggle_maintenance", "back", "admin_list", "admin_add_points", "admin_delete"]:
         await callback.answer("Сейчас технический перерыв! Действия недоступны.", show_alert=True)
         return
 
-    # -------- Клик --------
+    # ---------------- Клик ----------------
     if data == "click":
         cursor.execute("SELECT premium FROM users WHERE user_id = ?", (user[0],))
         status = cursor.fetchone()[0]
@@ -126,7 +121,7 @@ async def callback_handler(callback: types.CallbackQuery):
         conn.commit()
         await callback.answer(f"Вы получили {total} очков!")
 
-    # -------- Профиль --------
+    # ---------------- Профиль ----------------
     elif data == "profile":
         await callback.message.answer(
             f"Профиль {callback.from_user.first_name}\n"
@@ -136,7 +131,7 @@ async def callback_handler(callback: types.CallbackQuery):
             f"Клики: {user[4]}"
         )
 
-    # -------- Рейтинг --------
+    # ---------------- Рейтинг ----------------
     elif data == "rating":
         cursor.execute("SELECT username, points FROM users ORDER BY points DESC LIMIT 10")
         top = cursor.fetchall()
@@ -145,7 +140,7 @@ async def callback_handler(callback: types.CallbackQuery):
             text += f"{i}. {u[0]} — {u[1]} очков\n"
         await callback.message.answer(text)
 
-    # -------- Магазин --------
+    # ---------------- Магазин ----------------
     elif data == "shop":
         await callback.message.answer("Магазин:", reply_markup=shop_menu())
 
@@ -165,7 +160,7 @@ async def callback_handler(callback: types.CallbackQuery):
         else:
             await callback.answer("Недостаточно очков!", show_alert=True)
 
-    # -------- Админ меню --------
+    # ---------------- Админ ----------------
     elif data == "admin" and is_admin:
         await callback.message.answer("Админ меню:", reply_markup=admin_menu())
 
