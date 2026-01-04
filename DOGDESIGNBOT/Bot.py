@@ -1,14 +1,14 @@
 import sqlite3
+import asyncio
 from aiogram import Bot, Dispatcher, types
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
-from aiogram.utils import executor
 
 # ----------------- НАСТРОЙКИ -----------------
 TOKEN = "8376239597:AAHYeacPDfZDso4h3RD07vDYNTj9w9dg3wY"  # твой токен
 ADMIN_IDS = [7388659987]  # твой ID
 
 bot = Bot(token=TOKEN)
-dp = Dispatcher(bot)
+dp = Dispatcher()
 
 # ================== БАЗА ДАННЫХ ==================
 conn = sqlite3.connect("clicker.db")
@@ -73,8 +73,8 @@ def main_menu(is_admin=False):
 def shop_menu():
     kb = InlineKeyboardMarkup(row_width=1)
     kb.add(
-        InlineKeyboardButton("Премиум — 100 очков", callback_data="buy_premium"),
-        InlineKeyboardButton("Ультра Премиум — 500 очков", callback_data="buy_ultra"),
+        InlineKeyboardButton("Премиум — 5000 очков (+50 кликов)", callback_data="buy_premium"),
+        InlineKeyboardButton("Ультра Премиум — 50000 очков", callback_data="buy_ultra"),
         InlineKeyboardButton("Назад", callback_data="back")
     )
     return kb
@@ -83,7 +83,7 @@ def admin_menu():
     kb = InlineKeyboardMarkup(row_width=1)
     maintenance_status = get_maintenance()
     kb.add(
-        InlineKeyboardButton("Добавить очки пользователю", callback_data="admin_add_points"),
+        InlineKeyboardButton("Добавить очки/клики пользователю", callback_data="admin_add_points"),
         InlineKeyboardButton("Посмотреть всех пользователей", callback_data="admin_list"),
         InlineKeyboardButton("Удалить пользователя", callback_data="admin_delete"),
         InlineKeyboardButton(f"Тех.перерыв: {maintenance_status.upper()}", callback_data="toggle_maintenance"),
@@ -92,17 +92,16 @@ def admin_menu():
     return kb
 
 # ================== ХЕНДЛЕРЫ ==================
-@dp.message_handler(commands=['start'])
+@dp.message()
 async def start(message: types.Message):
     is_admin = message.from_user.id in ADMIN_IDS
-    user = get_user(message.from_user.id, message.from_user.username)
+    get_user(message.from_user.id, message.from_user.username)
     await message.answer(
         f"Привет, {message.from_user.first_name}! Добро пожаловать в Clicker Bot!",
         reply_markup=main_menu(is_admin)
     )
 
-# ------------------- CALLBACK -------------------
-@dp.callback_query_handler(lambda c: True)
+@dp.callback_query()
 async def callback_handler(callback: types.CallbackQuery):
     user = get_user(callback.from_user.id, callback.from_user.username)
     is_admin = callback.from_user.id in ADMIN_IDS
@@ -115,35 +114,23 @@ async def callback_handler(callback: types.CallbackQuery):
 
     # -------- Клик --------
     if data == "click":
-        # увеличиваем счётчик кликов
-        cursor.execute("UPDATE users SET clicks = clicks + 1 WHERE user_id = ?", (user[0],))
-        conn.commit()
-        cursor.execute("SELECT clicks, premium, points FROM users WHERE user_id = ?", (user[0],))
-        clicks, status, points = cursor.fetchone()
+        cursor.execute("SELECT premium FROM users WHERE user_id = ?", (user[0],))
+        status = cursor.fetchone()[0]
 
-        # базовые очки и бонусы
-        base_points = 1
-        bonus = 0
-        if status == "none":
-            base_points = 1
-        elif status == "premium":
-            base_points = 2
-            if clicks % 10 == 0:  # каждые 10 кликов бонус
-                bonus = 1
+        if status == "none" or status == "premium":
+            total = 1
         elif status == "ultra":
-            base_points = 5
-            if clicks % 5 == 0:  # каждый 5-й клик удвоение
-                bonus = base_points
+            total = 250
 
-        total = base_points + bonus
-        cursor.execute("UPDATE users SET points = points + ? WHERE user_id = ?", (total, user[0]))
+        cursor.execute("UPDATE users SET points = points + ?, clicks = clicks + 1 WHERE user_id = ?", (total, user[0]))
         conn.commit()
-        await callback.answer(f"Вы получили {total} очков! (Бонус: {bonus})")
+        await callback.answer(f"Вы получили {total} очков!")
 
     # -------- Профиль --------
     elif data == "profile":
         await callback.message.answer(
             f"Профиль {callback.from_user.first_name}\n"
+            f"ID: {user[0]}\n"
             f"Очки: {user[2]}\n"
             f"Статус: {user[3]}\n"
             f"Клики: {user[4]}"
@@ -163,16 +150,16 @@ async def callback_handler(callback: types.CallbackQuery):
         await callback.message.answer("Магазин:", reply_markup=shop_menu())
 
     elif data == "buy_premium":
-        if user[2] >= 100:
-            cursor.execute("UPDATE users SET points = points - 100, premium = 'premium' WHERE user_id = ?", (user[0],))
+        if user[2] >= 5000:
+            cursor.execute("UPDATE users SET points = points - 5000, premium = 'premium', clicks = clicks + 50 WHERE user_id = ?", (user[0],))
             conn.commit()
-            await callback.answer("Вы купили Премиум!")
+            await callback.answer("Вы купили Премиум! +50 кликов")
         else:
             await callback.answer("Недостаточно очков!", show_alert=True)
 
     elif data == "buy_ultra":
-        if user[2] >= 500:
-            cursor.execute("UPDATE users SET points = points - 500, premium = 'ultra' WHERE user_id = ?", (user[0],))
+        if user[2] >= 50000:
+            cursor.execute("UPDATE users SET points = points - 50000, premium = 'ultra' WHERE user_id = ?", (user[0],))
             conn.commit()
             await callback.answer("Вы купили Ультра Премиум!")
         else:
@@ -189,15 +176,15 @@ async def callback_handler(callback: types.CallbackQuery):
         await callback.message.answer(f"Технический перерыв теперь: {new_status.upper()}", reply_markup=admin_menu())
 
     elif data == "admin_list" and is_admin:
-        cursor.execute("SELECT user_id, username, points, premium FROM users")
+        cursor.execute("SELECT user_id, username, points, premium, clicks FROM users")
         users = cursor.fetchall()
         text = "Все пользователи:\n"
         for u in users:
-            text += f"{u[1]} ({u[0]}) — {u[2]} очков, {u[3]}\n"
+            text += f"{u[1]} (ID:{u[0]}) — {u[2]} очков, {u[3]}, {u[4]} кликов\n"
         await callback.message.answer(text)
 
     elif data == "admin_add_points" and is_admin:
-        await callback.message.answer("Введите ID пользователя и количество очков через пробел, например:\n123456789 50")
+        await callback.message.answer("Введите ID пользователя, очки и клики через пробел, например:\n123456789 500 10")
         dp.register_message_handler(admin_add_points)
 
     elif data == "admin_delete" and is_admin:
@@ -210,13 +197,15 @@ async def callback_handler(callback: types.CallbackQuery):
 # ------------------- ФУНКЦИИ АДМИНА -------------------
 async def admin_add_points(message: types.Message):
     try:
-        user_id, points = message.text.split()
-        points = int(points)
-        cursor.execute("UPDATE users SET points = points + ? WHERE user_id = ?", (points, int(user_id)))
+        parts = message.text.split()
+        user_id = int(parts[0])
+        points = int(parts[1]) if len(parts) > 1 else 0
+        clicks = int(parts[2]) if len(parts) > 2 else 0
+        cursor.execute("UPDATE users SET points = points + ?, clicks = clicks + ? WHERE user_id = ?", (points, clicks, user_id))
         conn.commit()
-        await message.answer(f"Добавлено {points} очков пользователю {user_id}")
+        await message.answer(f"Пользователю {user_id} добавлено: {points} очков, {clicks} кликов")
     except:
-        await message.answer("Ошибка ввода. Формат: ID очки")
+        await message.answer("Ошибка ввода. Формат: ID очки клики")
     dp.unregister_message_handler(admin_add_points)
 
 async def admin_delete_user(message: types.Message):
@@ -230,5 +219,8 @@ async def admin_delete_user(message: types.Message):
     dp.unregister_message_handler(admin_delete_user)
 
 # ================== ЗАПУСК ==================
+async def main():
+    await dp.start_polling(bot)
+
 if __name__ == "__main__":
-    executor.start_polling(dp, skip_updates=True)
+    asyncio.run(main())
