@@ -1,9 +1,22 @@
+import subprocess
+import sys
+
+# ==========================
+# Установка pytz если нет
+# ==========================
+try:
+    import pytz
+except ImportError:
+    subprocess.check_call([sys.executable, "-m", "pip", "install", "pytz"])
+    import pytz
+
+# ==========================
+# Остальные импорты
+# ==========================
 import asyncio
 import sqlite3
 from datetime import datetime, timedelta
-import pytz
 import random
-
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
@@ -11,7 +24,7 @@ from aiogram.fsm.state import StatesGroup, State
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
 # ================= CONFIG =================
-TOKEN = "8376239597:AAHYeacPDfZDso4h3RD07vDYNTj9w9dg3wY"
+TOKEN = "8376239597:AAHYeacPDfZDso4h3RD07vDYNTj9w9dg3wY"  # <-- Заменить на рабочий токен
 ADMIN_IDS = [7388659987]
 CHANNEL_ID = -1003650699170
 MSK = pytz.timezone("Europe/Moscow")
