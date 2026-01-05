@@ -1,30 +1,19 @@
-import subprocess
-import sys
 import asyncio
 import sqlite3
 from datetime import datetime, timedelta
-import random
+import pytz
 
-# ==========================
-# Установка pytz если нет
-# ==========================
-try:
-    import pytz
-except ImportError:
-    subprocess.check_call([sys.executable, "-m", "pip", "install", "pytz"])
-    import pytz
-
-from aiogram import Bot, Dispatcher, types, F
+from aiogram import Bot, Dispatcher, F, types
 from aiogram.filters import Command
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 # ================= CONFIG =================
-TOKEN = "8376239597:AAHYeacPDfZDso4h3RD07vDYNTj9w9dg3wY"  # <-- Замените на рабочий токен
+TOKEN = "8376239597:AAHYeacPDfZDso4h3RD07vDYNTj9w9dg3wY"  # <-- замените на рабочий токен
 ADMIN_IDS = [7388659987]
 CHANNEL_ID = -1003650699170
 MSK = pytz.timezone("Europe/Moscow")
 
-# ================= DB =================
+# ================= DATABASE =================
 db = sqlite3.connect("database.db")
 sql = db.cursor()
 
@@ -61,15 +50,15 @@ def tech_on():
     return sql.execute("SELECT tech FROM settings").fetchone()[0] == 1
 
 def main_kb(is_admin=False):
-    kb = [
-        [InlineKeyboardButton("🖱 Клик", callback_data="click")],
-        [InlineKeyboardButton("👤 Профиль", callback_data="profile"),
-         InlineKeyboardButton("🏆 Рейтинг", callback_data="top")],
-        [InlineKeyboardButton("🛒 Магазин", callback_data="shop")]
+    buttons = [
+        [InlineKeyboardButton(text="🖱 Клик", callback_data="click")],
+        [InlineKeyboardButton(text="👤 Профиль", callback_data="profile"),
+         InlineKeyboardButton(text="🏆 Рейтинг", callback_data="top")],
+        [InlineKeyboardButton(text="🛒 Магазин", callback_data="shop")]
     ]
     if is_admin:
-        kb.append([InlineKeyboardButton("⚙ Админ", callback_data="admin")])
-    return InlineKeyboardMarkup(inline_keyboard=kb)
+        buttons.append([InlineKeyboardButton(text="⚙ Админ", callback_data="admin")])
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 # ================= BOT =================
 bot = Bot(TOKEN)
@@ -85,7 +74,7 @@ async def start(msg: types.Message):
     )
 
 # ================= CLICK =================
-@dp.callback_query(F.data == "click")
+@dp.callback_query(F.data=="click")
 async def click(call: types.CallbackQuery):
     uid = call.from_user.id
     user = sql.execute("SELECT click, banned FROM users WHERE id=?", (uid,)).fetchone()
@@ -98,7 +87,7 @@ async def click(call: types.CallbackQuery):
     await call.answer(f"+{user[0]} очков")
 
 # ================= PROFILE =================
-@dp.callback_query(F.data == "profile")
+@dp.callback_query(F.data=="profile")
 async def profile(call: types.CallbackQuery):
     user = sql.execute("SELECT points, click, premium FROM users WHERE id=?", (call.from_user.id,)).fetchone()
     await call.message.edit_text(
@@ -108,18 +97,18 @@ async def profile(call: types.CallbackQuery):
     await call.answer()
 
 # ================= SHOP =================
-@dp.callback_query(F.data == "shop")
+@dp.callback_query(F.data=="shop")
 async def shop(call: types.CallbackQuery):
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton("⭐ Премиум — 5000", callback_data="buy_prem")],
-        [InlineKeyboardButton("🔥 Ультра — 50000", callback_data="buy_ultra")],
-        [InlineKeyboardButton("⬆ Улучшить клик — 1000", callback_data="upgrade_click")],
-        [InlineKeyboardButton("⬅ Назад", callback_data="back")]
+        [InlineKeyboardButton(text="⭐ Премиум — 5000", callback_data="buy_prem")],
+        [InlineKeyboardButton(text="🔥 Ультра — 50000", callback_data="buy_ultra")],
+        [InlineKeyboardButton(text="⬆ Улучшить клик — 1000", callback_data="upgrade_click")],
+        [InlineKeyboardButton(text="⬅ Назад", callback_data="back")]
     ])
     await call.message.edit_text("🛒 Магазин", reply_markup=kb)
     await call.answer()
 
-@dp.callback_query(F.data == "buy_prem")
+@dp.callback_query(F.data=="buy_prem")
 async def buy_prem(call: types.CallbackQuery):
     uid = call.from_user.id
     points = sql.execute("SELECT points FROM users WHERE id=?", (uid,)).fetchone()[0]
@@ -129,7 +118,7 @@ async def buy_prem(call: types.CallbackQuery):
     db.commit()
     await call.answer("⭐ Премиум активирован!", show_alert=True)
 
-@dp.callback_query(F.data == "buy_ultra")
+@dp.callback_query(F.data=="buy_ultra")
 async def buy_ultra(call: types.CallbackQuery):
     uid = call.from_user.id
     points = sql.execute("SELECT points FROM users WHERE id=?", (uid,)).fetchone()[0]
@@ -139,38 +128,38 @@ async def buy_ultra(call: types.CallbackQuery):
     db.commit()
     await call.answer("🔥 Ультра активирован!", show_alert=True)
 
-@dp.callback_query(F.data == "upgrade_click")
+@dp.callback_query(F.data=="upgrade_click")
 async def upgrade_click(call: types.CallbackQuery):
     uid = call.from_user.id
-    points = sql.execute("SELECT points, click FROM users WHERE id=?", (uid,)).fetchone()
-    if points[0] < 1000:
+    points, click = sql.execute("SELECT points, click FROM users WHERE id=?", (uid,)).fetchone()
+    if points < 1000:
         return await call.answer("❌ Недостаточно очков", show_alert=True)
     sql.execute("UPDATE users SET points=points-1000, click=click+1 WHERE id=?", (uid,))
     db.commit()
     await call.answer("🖱 Клик улучшен на +1!", show_alert=True)
 
-@dp.callback_query(F.data == "back")
+@dp.callback_query(F.data=="back")
 async def back(call: types.CallbackQuery):
     await call.message.edit_text("Главное меню", reply_markup=main_kb(call.from_user.id in ADMIN_IDS))
     await call.answer()
 
 # ================= ADMIN =================
-@dp.callback_query(F.data == "admin")
+@dp.callback_query(F.data=="admin")
 async def admin_menu(call: types.CallbackQuery):
     if call.from_user.id not in ADMIN_IDS:
         return await call.answer("🚫 Нет доступа", show_alert=True)
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton("➕ Очки", callback_data="a_points")],
-        [InlineKeyboardButton("⭐ Премиум", callback_data="a_prem")],
-        [InlineKeyboardButton("🚫 Бан", callback_data="a_ban")],
-        [InlineKeyboardButton("🛠 Техперерыв", callback_data="a_tech")],
-        [InlineKeyboardButton("📢 Рассылка в канал", callback_data="a_channel")]
+        [InlineKeyboardButton(text="➕ Очки", callback_data="a_points")],
+        [InlineKeyboardButton(text="⭐ Премиум", callback_data="a_prem")],
+        [InlineKeyboardButton(text="🚫 Бан", callback_data="a_ban")],
+        [InlineKeyboardButton(text="🛠 Техперерыв", callback_data="a_tech")],
+        [InlineKeyboardButton(text="📢 Рассылка в канал", callback_data="a_channel")]
     ])
     await call.message.edit_text("⚙ Админ меню", reply_markup=kb)
     await call.answer()
 
 # ================= РЕЙТИНГ =================
-@dp.callback_query(F.data == "top")
+@dp.callback_query(F.data=="top")
 async def top_list(call: types.CallbackQuery):
     users = sql.execute("SELECT id, points FROM users ORDER BY points DESC LIMIT 10").fetchall()
     text = "🏆 Рейтинг:\n"
@@ -190,95 +179,6 @@ async def daily_top():
             sql.execute("UPDATE users SET points = points + 1000 WHERE id=?", (top[0],))
             db.commit()
             await bot.send_message(CHANNEL_ID, f"🏆 Топ-1 дня получил 1000 очков!\nID: {top[0]}")
-
-# ================= ADMIN COMMANDS =================
-@dp.message(Command("give"))
-async def give(msg: types.Message):
-    if msg.from_user.id not in ADMIN_IDS:
-        return
-    try:
-        _, uid, amount = msg.text.split()
-        uid = int(uid)
-        amount = int(amount)
-        sql.execute("UPDATE users SET points=points+? WHERE id=?", (amount, uid))
-        db.commit()
-        await msg.reply(f"✅ Выдано {amount} очков пользователю {uid}")
-    except:
-        await msg.reply("❌ Использование: /give <id> <кол-во>")
-
-@dp.message(Command("premium"))
-async def premium(msg: types.Message):
-    if msg.from_user.id not in ADMIN_IDS:
-        return
-    try:
-        _, uid, kind = msg.text.split()
-        uid = int(uid)
-        if kind.lower() == "prem":
-            sql.execute("UPDATE users SET premium=1, click=50 WHERE id=?", (uid,))
-        elif kind.lower() == "ultra":
-            sql.execute("UPDATE users SET premium=2, click=250 WHERE id=?", (uid,))
-        else:
-            return await msg.reply("❌ Тип премиума: prem / ultra")
-        db.commit()
-        await msg.reply(f"✅ Премиум {kind} выдан пользователю {uid}")
-    except:
-        await msg.reply("❌ Использование: /premium <id> <prem/ultra>")
-
-@dp.message(Command("ban"))
-async def ban(msg: types.Message):
-    if msg.from_user.id not in ADMIN_IDS:
-        return
-    try:
-        _, uid = msg.text.split()
-        uid = int(uid)
-        sql.execute("UPDATE users SET banned=1 WHERE id=?", (uid,))
-        db.commit()
-        await msg.reply(f"🚫 Пользователь {uid} забанен")
-    except:
-        await msg.reply("❌ Использование: /ban <id>")
-
-@dp.message(Command("unban"))
-async def unban(msg: types.Message):
-    if msg.from_user.id not in ADMIN_IDS:
-        return
-    try:
-        _, uid = msg.text.split()
-        uid = int(uid)
-        sql.execute("UPDATE users SET banned=0 WHERE id=?", (uid,))
-        db.commit()
-        await msg.reply(f"✅ Пользователь {uid} разбанен")
-    except:
-        await msg.reply("❌ Использование: /unban <id>")
-
-@dp.message(Command("tech"))
-async def tech(msg: types.Message):
-    if msg.from_user.id not in ADMIN_IDS:
-        return
-    try:
-        _, state = msg.text.split()
-        state = state.lower()
-        if state == "on":
-            sql.execute("UPDATE settings SET tech=1 WHERE id=1")
-            db.commit()
-            await msg.reply("🛠 Технический перерыв включен")
-        elif state == "off":
-            sql.execute("UPDATE settings SET tech=0 WHERE id=1")
-            db.commit()
-            await msg.reply("🛠 Технический перерыв выключен")
-        else:
-            await msg.reply("❌ Использование: /tech on/off")
-    except:
-        await msg.reply("❌ Использование: /tech on/off")
-
-@dp.message(Command("broadcast"))
-async def broadcast(msg: types.Message):
-    if msg.from_user.id not in ADMIN_IDS:
-        return
-    text = msg.get_args()
-    if not text:
-        return await msg.reply("❌ Использование: /broadcast <текст>")
-    await bot.send_message(CHANNEL_ID, text)
-    await msg.reply("✅ Рассылка отправлена в канал")
 
 # ================= MAIN =================
 async def main():
